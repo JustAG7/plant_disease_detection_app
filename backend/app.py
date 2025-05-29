@@ -159,21 +159,35 @@ def predict():
 @app.route('/predict_url', methods=['POST'])
 def predict_from_url():
     try:
+        import requests
+        from PIL import Image
+        import io
+        
         data = request.get_json()
         
         if 'url' not in data:
             return jsonify({'error': 'No image URL provided'}), 400
         
-        # This would require implementing URL image loading
-        # For now, return a mock response
-        return jsonify({
-            'className': 'Tomato___healthy',
-            'confidence': 0.95,
-            'isHealthy': True,
-            'plantType': 'Tomato',
-            'diseaseType': None
-        })
+        image_url = data['url']
         
+        # Download image from URL
+        response = requests.get(image_url, timeout=10)
+        response.raise_for_status()
+        
+        # Convert to PIL Image
+        image = Image.open(io.BytesIO(response.content)).convert('RGB')
+        
+        # Make prediction
+        result = model_service.predict(image)
+        
+        if result:
+            return jsonify(result)
+        else:
+            return jsonify({'error': 'Prediction failed'}), 500
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to download image from URL: {e}")
+        return jsonify({'error': f'Failed to download image: {str(e)}'}), 400
     except Exception as e:
         logger.error(f"URL prediction endpoint error: {e}")
         return jsonify({'error': str(e)}), 500

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -20,53 +20,22 @@ interface CameraComponentProps {
 }
 
 export default function CameraComponent({ visible, onClose, onPrediction }: CameraComponentProps) {
+  // All hooks must be called at the top level in the same order every time
   const [facing, setFacing] = useState<CameraType>('back');
-  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastPrediction, setLastPrediction] = useState<PredictionResult | null>(null);
   const [autoCapture, setAutoCapture] = useState(false);
-  const cameraRef = useRef<CameraView>(null);
+  const [permission, requestPermission] = useCameraPermissions();
 
-  useEffect(() => {
-    if (visible && !modelService.isModelLoaded()) {
-      loadModel();
-    }
-  }, [visible]);
-
-  const loadModel = async () => {
+  const loadModel = useCallback(async () => {
     const loaded = await modelService.loadModel();
     if (!loaded) {
       Alert.alert('Error', 'Failed to load the plant disease detection model');
     }
-  };
+  }, []);
 
-  if (!permission) {
-    return <View />;
-  }
-
-  if (!permission.granted) {
-    return (
-      <Modal visible={visible} animationType="slide">
-        <SafeAreaView style={styles.container}>
-          <View style={styles.permissionContainer}>
-            <Text style={styles.message}>We need your permission to show the camera</Text>
-            <TouchableOpacity style={styles.button} onPress={requestPermission}>
-              <Text style={styles.buttonText}>Grant Permission</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-              <Text style={styles.buttonText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </Modal>
-    );
-  }
-
-  const toggleCameraFacing = () => {
-    setFacing(current => (current === 'back' ? 'front' : 'back'));
-  };
-
-  const captureAndAnalyze = async () => {
+  const captureAndAnalyze = useCallback(async () => {
     if (!cameraRef.current || isAnalyzing) return;
 
     try {
@@ -101,9 +70,9 @@ export default function CameraComponent({ visible, onClose, onPrediction }: Came
     } finally {
       setIsAnalyzing(false);
     }
-  };
+  }, [isAnalyzing, onPrediction]);
 
-  const toggleAutoCapture = () => {
+  const toggleAutoCapture = useCallback(() => {
     setAutoCapture(!autoCapture);
     if (!autoCapture) {
       // Start auto capture mode
@@ -113,7 +82,13 @@ export default function CameraComponent({ visible, onClose, onPrediction }: Came
         [{ text: 'OK' }]
       );
     }
-  };
+  }, [autoCapture]);
+
+  useEffect(() => {
+    if (visible && !modelService.isModelLoaded()) {
+      loadModel();
+    }
+  }, [visible, loadModel]);
 
   // Auto capture effect
   useEffect(() => {
@@ -130,7 +105,34 @@ export default function CameraComponent({ visible, onClose, onPrediction }: Came
         clearInterval(interval);
       }
     };
-  }, [autoCapture, visible, isAnalyzing]);
+  }, [autoCapture, visible, isAnalyzing, captureAndAnalyze]);
+
+  // Early returns for permission handling
+  if (!permission) {
+    return <View />;
+  }
+
+  if (!permission.granted) {
+    return (
+      <Modal visible={visible} animationType="slide">
+        <SafeAreaView style={styles.container}>
+          <View style={styles.permissionContainer}>
+            <Text style={styles.message}>We need your permission to show the camera</Text>
+            <TouchableOpacity style={styles.button} onPress={requestPermission}>
+              <Text style={styles.buttonText}>Grant Permission</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+              <Text style={styles.buttonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+    );
+  }
+
+  const toggleCameraFacing = () => {
+    setFacing(current => (current === 'back' ? 'front' : 'back'));
+  };
 
   return (
     <Modal visible={visible} animationType="slide">
@@ -146,7 +148,8 @@ export default function CameraComponent({ visible, onClose, onPrediction }: Came
         </View>
 
         <CameraView style={styles.camera} facing={facing} ref={cameraRef}>
-          <View style={styles.overlay}>            {/* Detection frame */}
+          <View style={styles.overlay}>
+            {/* Detection frame */}
             <View style={styles.detectionFrame}>
               <View style={[styles.corner, styles.topLeft]} />
               <View style={[styles.corner, styles.topRight]} />

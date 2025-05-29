@@ -1,7 +1,7 @@
 import * as FileSystem from 'expo-file-system';
 
 // Backend API configuration
-const API_BASE_URL = 'http://localhost:5000'; // Change this to your backend URL
+const API_BASE_URL = 'http://127.0.0.1:5000'; // Change this to your backend URL if different
 
 // Define the class names based on your dataset structure
 export const CLASS_NAMES = [
