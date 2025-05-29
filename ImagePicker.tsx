@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,23 +9,40 @@ import {
   Alert,
   Modal,
   Dimensions,
-  SafeAreaView
+  SafeAreaView,
+  ActivityIndicator
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { modelService, PredictionResult } from './services/ModelService';
 
 interface ImagePickerComponentProps {
   onImagesSelected?: (images: ImagePicker.ImagePickerAsset[]) => void;
+  onPrediction?: (result: PredictionResult) => void;
   maxImages?: number;
 }
 
 export default function ImagePickerComponent({ 
   onImagesSelected, 
+  onPrediction,
   maxImages = 10 
 }: ImagePickerComponentProps) {
   const [images, setImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
   // Add state for preview modal
   const [previewVisible, setPreviewVisible] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResults, setAnalysisResults] = useState<{ [key: string]: PredictionResult }>({});
+
+  useEffect(() => {
+    // Load model when component mounts
+    loadModel();
+  }, []);
+
+  const loadModel = async () => {
+    if (!modelService.isModelLoaded()) {
+      await modelService.loadModel();
+    }
+  };
 
   const requestPermission = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -120,15 +137,75 @@ export default function ImagePickerComponent({
       Alert.alert('Error', 'Failed to take photo');
     }
   };
-
   const removeImage = (index: number) => {
+    const removedImage = images[index];
     const updatedImages = images.filter((_, i) => i !== index);
     setImages(updatedImages);
+    
+    // Remove analysis result for this image
+    if (removedImage.uri && analysisResults[removedImage.uri]) {
+      const newResults = { ...analysisResults };
+      delete newResults[removedImage.uri];
+      setAnalysisResults(newResults);
+    }
+    
     if (onImagesSelected) {
       onImagesSelected(updatedImages);
     }
   };
 
+  const analyzeImage = async (imageUri: string) => {
+    if (analysisResults[imageUri] || !modelService.isModelLoaded()) {
+      return; // Already analyzed or model not loaded
+    }
+
+    setIsAnalyzing(true);
+    try {
+      const result = await modelService.predictImage(imageUri);
+      if (result) {
+        setAnalysisResults(prev => ({
+          ...prev,
+          [imageUri]: result
+        }));
+        
+        if (onPrediction) {
+          onPrediction(result);
+        }
+      }
+    } catch (error) {
+      console.error('Analysis failed:', error);
+      Alert.alert('Error', 'Failed to analyze image');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const analyzeAllImages = async () => {
+    if (images.length === 0) {
+      Alert.alert('No Images', 'Please select images first');
+      return;
+    }
+
+    if (!modelService.isModelLoaded()) {
+      Alert.alert('Model Loading', 'Please wait for the model to load');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    try {
+      for (const image of images) {
+        if (!analysisResults[image.uri]) {
+          await analyzeImage(image.uri);
+        }
+      }
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const getResultForImage = (imageUri: string): PredictionResult | undefined => {
+    return analysisResults[imageUri];
+  };
   return (
     <View style={styles.container}>
       <View style={styles.buttonContainer}>
@@ -144,6 +221,19 @@ export default function ImagePickerComponent({
         >
           <Text style={styles.buttonText}>Take Photo</Text>
         </TouchableOpacity>
+        {images.length > 0 && (
+          <TouchableOpacity
+            style={[styles.button, styles.analyzeButton, isAnalyzing && styles.disabledButton]}
+            onPress={analyzeAllImages}
+            disabled={isAnalyzing}
+          >
+            {isAnalyzing ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Text style={styles.buttonText}>Analyze All</Text>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
       
       {images.length > 0 && (
@@ -156,23 +246,47 @@ export default function ImagePickerComponent({
         horizontal={false} 
         contentContainerStyle={styles.imagesContainer}
       >
-        {images.map((image, index) => (
-          <View key={index} style={styles.imageWrapper}>
-            <TouchableOpacity onPress={() => handlePreviewImage(index)}>
-              <Image
-                source={{ uri: image.uri }}
-                style={styles.image}
-                resizeMode="cover"
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.removeButton}
-              onPress={() => removeImage(index)}
-            >
-              <Text style={styles.removeButtonText}>✕</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
+        {images.map((image, index) => {
+          const result = getResultForImage(image.uri);
+          return (
+            <View key={index} style={styles.imageWrapper}>
+              <TouchableOpacity onPress={() => handlePreviewImage(index)}>
+                <Image
+                  source={{ uri: image.uri }}
+                  style={styles.image}
+                  resizeMode="cover"
+                />
+                {result && (
+                  <View style={[
+                    styles.resultOverlay,
+                    { backgroundColor: result.isHealthy ? 'rgba(76, 175, 80, 0.9)' : 'rgba(244, 67, 54, 0.9)' }
+                  ]}>
+                    <Text style={styles.resultText}>
+                      {result.isHealthy ? '✓ Healthy' : '⚠ Disease'}
+                    </Text>
+                    <Text style={styles.confidenceText}>
+                      {(result.confidence * 100).toFixed(0)}%
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.removeButton}
+                onPress={() => removeImage(index)}
+              >
+                <Text style={styles.removeButtonText}>✕</Text>
+              </TouchableOpacity>              <TouchableOpacity
+                style={styles.analyzeImageButton}
+                onPress={() => analyzeImage(image.uri)}
+                disabled={isAnalyzing || !!result}
+              >
+                <Text style={styles.analyzeButtonText}>
+                  {result ? '✓' : '🔍'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          );
+        })}
       </ScrollView>
 
       {/* Image Preview Modal */}
@@ -254,10 +368,16 @@ const styles = StyleSheet.create({
   pickButton: {
     backgroundColor: '#4CAF50',
     marginRight: 10,
-  },
-  cameraButton: {
+  },  cameraButton: {
     backgroundColor: '#2196F3',
     marginLeft: 10,
+  },
+  analyzeButton: {
+    backgroundColor: '#FF9800',
+    marginLeft: 10,
+  },
+  disabledButton: {
+    backgroundColor: '#ccc',
   },
   buttonText: {
     color: '#fff',
@@ -290,8 +410,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#ddd',
-  },
-  removeButton: {
+  },  removeButton: {
     position: 'absolute',
     top: -10,
     right: -10,
@@ -307,6 +426,18 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
     fontSize: 14,
+  },
+  analyzeImageButton: {
+    position: 'absolute',
+    bottom: -10,
+    right: -10,
+    backgroundColor: '#FF9800',
+    borderRadius: 15,
+    width: 25,
+    height: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
   },
   previewContainer: {
     flex: 1,
@@ -363,10 +494,32 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
     fontSize: 18,
-  },
-  imageCounter: {
+  },  imageCounter: {
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
-  }
+  },
+  resultOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 4,
+    alignItems: 'center',
+  },
+  resultText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  confidenceText: {
+    color: 'white',
+    fontSize: 8,
+    fontWeight: 'bold',
+  },
+  analyzeButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
 });
